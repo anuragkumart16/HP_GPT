@@ -1,172 +1,166 @@
-from collections import Counter
 import re
 import json
+import os
 import numpy as np
+from collections import Counter
 
 
-# ============================================
-# 1. Split text into words and punctuation
-# ============================================
+CORPUS_PATH = "data/raw/corpus.txt"
+CHECKPOINT_PATH = "tokenizer/bpe_checkpoint.json"
+
+MIN_FREQUENCY = 50
+CHECKPOINT_EVERY = 100
+
+
+# -----------------------------
+# 1. Split text
+# -----------------------------
 
 def split_text(text):
-    return re.findall(r"\w+|[^\w\s]", text)
+    text = text.replace(" ", " ▁")
+    return re.findall(r"\w+|[^\w\s]|▁", text)
 
 
-# ============================================
+# -----------------------------
 # 2. Count adjacent pairs
-# ============================================
+# -----------------------------
 
 def get_pair_counts(words):
-
     pair_counts = Counter()
 
     for word in words:
-
         for i in range(len(word) - 1):
-
             pair = (word[i], word[i + 1])
-
             pair_counts[pair] += 1
 
     return pair_counts
 
 
-# ============================================
-# 3. Merge one pair
-# ============================================
+# -----------------------------
+# 3. Merge a pair
+# -----------------------------
 
 def merge_pair(words, pair):
-
-    new_words = []
+    merged_words = []
 
     for word in words:
-
         new_word = []
-
         i = 0
 
         while i < len(word):
-
             if (
                 i < len(word) - 1
-                and (word[i], word[i + 1]) == pair
+                and word[i] == pair[0]
+                and word[i + 1] == pair[1]
             ):
-
-                merged_token = (
-                    word[i] + word[i + 1]
-                )
-
-                new_word.append(merged_token)
-
+                new_word.append(pair[0] + pair[1])
                 i += 2
-
             else:
-
                 new_word.append(word[i])
-
                 i += 1
 
-        new_words.append(new_word)
+        merged_words.append(new_word)
 
-    return new_words
+    return merged_words
 
 
-# ============================================
-# 4. Train BPE
-# ============================================
+# -----------------------------
+# 4. Save checkpoint
+# -----------------------------
 
-def train_bpe(text, num_merges):
+def save_checkpoint(merges):
+    os.makedirs("tokenizer", exist_ok=True)
 
-    # ----------------------------------------
-    # Step 1: Split text
-    # ----------------------------------------
+    with open(CHECKPOINT_PATH, "w") as f:
+        json.dump(
+            {
+                "merges": merges
+            },
+            f
+        )
+
+    print(f"Checkpoint saved at {len(merges)} merges")
+
+
+# -----------------------------
+# 5. Train BPE
+# -----------------------------
+
+def train_bpe(text):
+
+    print("Splitting text...")
 
     tokens = split_text(text)
 
-    print("Initial tokens:", len(tokens))
+    print(f"Initial tokens: {len(tokens):,}")
 
-    # ----------------------------------------
-    # Step 2: Convert every token into chars
-    # ----------------------------------------
-
-    words = [
-        list(token)
-        for token in tokens
-    ]
-
-    print("Character representation created.")
-
-    # ----------------------------------------
-    # Step 3: Initial pair counts
-    # ----------------------------------------
-
-    pair_counts = get_pair_counts(words)
-
-    # ----------------------------------------
-    # Step 4: BPE training
-    # ----------------------------------------
+    # Convert every token into characters
+    words = [list(token) for token in tokens]
 
     merges = []
 
-    for step in range(num_merges):
+    while True:
+
+        pair_counts = get_pair_counts(words)
 
         if not pair_counts:
             break
 
-        # Find most frequent pair
-
-        best_pair = max(
-            pair_counts,
-            key=pair_counts.get
-        )
-
-        best_count = pair_counts[best_pair]
-
-        # Store merge rule
-
-        merges.append(best_pair)
+        pair, frequency = pair_counts.most_common(1)[0]
 
         print(
-            f"Merge {step + 1}/{num_merges}:",
-            best_pair,
-            "count =",
-            best_count
+            f"Merge {len(merges) + 1}: "
+            f"{pair} -> frequency {frequency:,}"
         )
 
-        # Merge pair
+        # Stop when frequency falls below threshold
+        if frequency < MIN_FREQUENCY:
+            print(
+                f"\nStopping BPE training."
+                f"\nBest pair frequency: {frequency}"
+                f"\nMinimum frequency: {MIN_FREQUENCY}"
+            )
+            break
 
-        words = merge_pair(
-            words,
-            best_pair
-        )
+        # Apply merge
+        words = merge_pair(words, pair)
 
-        # Recalculate pair counts
-        #
-        # This is still simple/educational.
-        # Later we can optimize this further.
+        merges.append(pair)
 
-        pair_counts = get_pair_counts(words)
+        # Save every 100 merges
+        if len(merges) % CHECKPOINT_EVERY == 0:
+            save_checkpoint(merges)
 
-    # ----------------------------------------
-    # Step 5: Build vocabulary
-    # ----------------------------------------
+    return merges, words
+
+
+# -----------------------------
+# 6. Build vocabulary
+# -----------------------------
+
+def build_vocab(words):
 
     vocabulary = set()
 
     for word in words:
+        vocabulary.update(word)
 
-        for token in word:
+    token_to_id = {
+        token: i
+        for i, token in enumerate(sorted(vocabulary))
+    }
 
-            vocabulary.add(token)
+    id_to_token = {
+        i: token
+        for token, i in token_to_id.items()
+    }
 
-    vocabulary = sorted(vocabulary)
-
-    return merges, vocabulary
+    return token_to_id, id_to_token
 
 
-# ============================================
-# 5. Encode a word
-# ============================================
+# -----------------------------
+# 7. Encode corpus
+# -----------------------------
 
 def encode_word(word, merges):
 
@@ -175,32 +169,19 @@ def encode_word(word, merges):
     for pair in merges:
 
         new_tokens = []
-
         i = 0
 
         while i < len(tokens):
 
             if (
                 i < len(tokens) - 1
-                and (tokens[i], tokens[i + 1]) == pair
+                and tokens[i] == pair[0]
+                and tokens[i + 1] == pair[1]
             ):
-
-                merged_token = (
-                    tokens[i] + tokens[i + 1]
-                )
-
-                new_tokens.append(
-                    merged_token
-                )
-
+                new_tokens.append(pair[0] + pair[1])
                 i += 2
-
             else:
-
-                new_tokens.append(
-                    tokens[i]
-                )
-
+                new_tokens.append(tokens[i])
                 i += 1
 
         tokens = new_tokens
@@ -208,337 +189,79 @@ def encode_word(word, merges):
     return tokens
 
 
-# ============================================
-# 6. Load Harry Potter corpus
-# ============================================
+# -----------------------------
+# 8. Main
+# -----------------------------
 
-with open(
-    "data/raw/corpus.txt",
-    "r",
-    encoding="utf-8"
-) as file:
+if __name__ == "__main__":
 
-    text = file.read()
+    print("Loading corpus...")
 
+    with open(CORPUS_PATH, "r", encoding="utf-8") as f:
+        text = f.read()
 
-print("\n================================")
-print("CORPUS INFORMATION")
-print("================================")
+    print(f"Corpus characters: {len(text):,}")
 
-print(
-    "Characters:",
-    len(text)
-)
+    merges, words = train_bpe(text)
 
-print(
-    "Words:",
-    len(text.split())
-)
+    print(f"\nTotal merges learned: {len(merges):,}")
 
-print(
-    "First 200 characters:"
-)
+    # Build vocabulary
+    token_to_id, id_to_token = build_vocab(words)
 
-print(text[:200])
+    print(f"Vocabulary size: {len(token_to_id):,}")
 
+    # Encode corpus
+    print("\nEncoding corpus...")
 
-# ============================================
-# 7. Train BPE
-# ============================================
+    corpus_token_ids = []
 
-print("\n================================")
-print("TRAINING BPE")
-print("================================")
+    for word in words:
 
-merges, vocabulary = train_bpe(
-    text,
-    num_merges=50
-)
+        for token in word:
+            corpus_token_ids.append(
+                token_to_id[token]
+            )
 
-
-# ============================================
-# 8. Create Token -> ID
-# ============================================
-
-token_to_id = {}
-
-for i, token in enumerate(vocabulary):
-
-    token_to_id[token] = i
-
-
-# ============================================
-# 9. Create ID -> Token
-# ============================================
-
-id_to_token = {}
-
-for token, token_id in token_to_id.items():
-
-    id_to_token[token_id] = token
-
-
-# ============================================
-# 10. Print results
-# ============================================
-
-print("\n================================")
-print("BPE RESULTS")
-print("================================")
-
-print(
-    "Number of merges:",
-    len(merges)
-)
-
-print(
-    "Vocabulary size:",
-    len(vocabulary)
-)
-
-
-print("\nFirst 50 vocabulary tokens:")
-
-print(
-    vocabulary[:50]
-)
-
-
-print("\nFirst 20 merge rules:")
-
-for merge in merges[:20]:
-
-    print(merge)
-
-
-# ============================================
-# 11. Test encoding
-# ============================================
-
-print("\n================================")
-print("ENCODING TEST")
-print("================================")
-
-
-test_words = [
-    "Harry",
-    "Potter",
-    "Hogwarts",
-    "Dumbledore",
-    "Hermione",
-    "magic"
-]
-
-
-for word in test_words:
-
-    tokens = encode_word(
-        word,
-        merges
+    corpus_token_ids = np.array(
+        corpus_token_ids,
+        dtype=np.int32
     )
 
     print(
-        word,
-        "->",
-        tokens
+        f"Final corpus tokens: "
+        f"{len(corpus_token_ids):,}"
     )
 
+    # Save token IDs
+    os.makedirs("tokenizer", exist_ok=True)
 
-# ============================================
-# 12. Convert tokens to IDs
-# ============================================
-
-print("\n================================")
-print("TOKEN IDS")
-print("================================")
-
-
-word = "Harry"
-
-tokens = encode_word(
-    word,
-    merges
-)
-
-token_ids = []
-
-for token in tokens:
-
-    if token in token_to_id:
-
-        token_ids.append(
-            token_to_id[token]
-        )
-
-    else:
-
-        print(
-            "Unknown token:",
-            token
-        )
-
-
-print(
-    word,
-    "->",
-    tokens
-)
-
-print(
-    "Token IDs:",
-    token_ids
-)
-
-
-# ============================================
-# 13. Decode token IDs back to text
-# ============================================
-
-def decode(token_ids, id_to_token):
-
-    tokens = [
-        id_to_token[token_id]
-        for token_id in token_ids
-    ]
-
-    return "".join(tokens)
-
-
-print("\n================================")
-print("DECODING TEST")
-print("================================")
-
-decoded_word = decode(
-    token_ids,
-    id_to_token
-)
-
-print(
-    "Token IDs:",
-    token_ids,
-    "-> Decoded:",
-    decoded_word
-)
-
-
-# ============================================
-# 14. Encode the full corpus
-# ============================================
-
-print("\n================================")
-print("ENCODING FULL CORPUS")
-print("================================")
-
-corpus_words = split_text(text)
-
-corpus_tokens = []
-
-for corpus_word in corpus_words:
-
-    corpus_tokens.extend(
-        encode_word(corpus_word, merges)
+    np.save(
+        "tokenizer/tokens.npy",
+        corpus_token_ids
     )
 
-corpus_token_ids = [
-    token_to_id[token]
-    for token in corpus_tokens
-]
-
-print(
-    "Words before BPE:",
-    len(corpus_words)
-)
-
-print(
-    "Tokens after BPE:",
-    len(corpus_tokens)
-)
-
-print(
-    "First 50 corpus tokens:",
-    corpus_tokens[:50]
-)
-
-print(
-    "First 50 corpus token IDs:",
-    corpus_token_ids[:50]
-)
-
-
-# ============================================
-# 15. Save tokens and vocabulary to disk
-# ============================================
-
-print("\n================================")
-print("SAVING TO DISK")
-print("================================")
-
-np.save(
-    "tokenizer/tokens.npy",
-    np.array(corpus_token_ids, dtype=np.int32)
-)
-
-with open(
-    "tokenizer/vocab.json",
-    "w",
-    encoding="utf-8"
-) as file:
-
-    json.dump(
-        {
-            "token_to_id": token_to_id,
-            "merges": merges
-        },
-        file
-    )
-
-print("Saved tokenizer/tokens.npy")
-print("Saved tokenizer/vocab.json")
-
-
-# ============================================
-# 16. Load a saved tokenizer from disk
-# ============================================
-
-def load_tokenizer(vocab_path):
-
+    # Save vocabulary
     with open(
-        vocab_path,
-        "r",
+        "tokenizer/vocab.json",
+        "w",
         encoding="utf-8"
-    ) as file:
+    ) as f:
 
-        data = json.load(file)
+        json.dump(
+            {
+                "token_to_id": token_to_id,
+                "id_to_token": {
+                    str(k): v
+                    for k, v in id_to_token.items()
+                },
+                "merges": merges
+            },
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
 
-    loaded_token_to_id = data["token_to_id"]
-
-    # JSON has no tuple type, so merges come back as
-    # lists. encode_word() compares against tuples,
-    # so they must be converted back.
-
-    loaded_merges = [
-        tuple(pair)
-        for pair in data["merges"]
-    ]
-
-    return loaded_token_to_id, loaded_merges
-
-
-print("\n================================")
-print("LOAD TOKENIZER TEST")
-print("================================")
-
-loaded_token_to_id, loaded_merges = load_tokenizer(
-    "tokenizer/vocab.json"
-)
-
-loaded_tokens = encode_word(
-    "Harry",
-    loaded_merges
-)
-
-print(
-    "Harry ->",
-    loaded_tokens,
-    "(loaded from disk)"
-)
+    print("\nTokenizer saved:")
+    print("  tokenizer/tokens.npy")
+    print("  tokenizer/vocab.json")
