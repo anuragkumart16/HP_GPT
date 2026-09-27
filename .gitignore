@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data (never commit raw/copyrighted text)
+data/
+
+# Model checkpoints / training artifacts
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Env files
+.env
+
+# OS
+.DS_Store
